@@ -182,10 +182,10 @@ impl Notification {
                 };
 
                 let hwnd = CreateWindowExW(
-                    WS_EX_TOPMOST,
+                    WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                     class_name,
                     w!("win7-notifications-window"),
-                    WS_SYSMENU | WS_CAPTION | WS_VISIBLE,
+                    WS_POPUP | WS_BORDER,
                     right - NW - 15,
                     bottom - NH - 15,
                     NW,
@@ -232,7 +232,7 @@ impl Notification {
                 }
 
                 util::skip_taskbar(hwnd);
-                ShowWindow(hwnd, SW_SHOW);
+                ShowWindow(hwnd, SW_SHOWNA);
                 if !self.silent {
                     // Passing an invalid path to `PlaySoundW` will make windows play default sound.
                     // https://docs.microsoft.com/en-us/previous-versions/dd743680(v=vs.85)#remarks
