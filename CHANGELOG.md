@@ -1,5 +1,9 @@
 # Changelog
 
+## \[0.4.4]
+
+- [`a0fbb67`](https://github.com/tauri-apps/win7-notifications/commit/a0fbb67ed22056ba3cd61842a3e5abd023f0185c) ([#65](https://github.com/tauri-apps/win7-notifications/pull/65)) Fix notification window causes the main window to lose focus.
+
 ## \[0.4.3]
 
 - [`c28f8f6`](https://github.com/tauri-apps/win7-notifications/commit/c28f8f61a0c1c906bacc9b5b740d8ea343707afb) Update `windows-sys` crate to `0.52`
