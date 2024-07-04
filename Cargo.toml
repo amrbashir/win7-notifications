@@ -24,11 +24,8 @@ once_cell = "1"
   features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
-  "Win32_System_Com",
   "Win32_Graphics_Gdi",
-  "Win32_Graphics_Dwm",
   "Win32_UI_Shell",
-  "Win32_UI_Controls",
   "Win32_UI_WindowsAndMessaging",
   "Win32_Media_Audio"
 ]

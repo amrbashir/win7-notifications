@@ -7,14 +7,8 @@ use std::{ptr, sync::Mutex, thread, time::Duration};
 use windows_sys::{
     w,
     Win32::{
-        Foundation::*,
-        Graphics::{Dwm::*, Gdi::*},
-        Media::Audio::*,
-        System::LibraryLoader::*,
-        UI::{
-            Controls::*,
-            WindowsAndMessaging::{self as w32wm, *},
-        },
+        Foundation::*, Graphics::Gdi::*, Media::Audio::*, System::LibraryLoader::*,
+        UI::WindowsAndMessaging::*,
     },
 };
 
@@ -203,35 +197,9 @@ impl Notification {
                 // reposition active notifications and make room for new one
                 if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
                     active_notifications.push(hwnd);
-                    let mut i = active_notifications.len() as i32;
-                    for hwnd in active_notifications.iter() {
-                        SetWindowPos(
-                            *hwnd,
-                            0,
-                            right - NW - 15,
-                            bottom - 15 - (NH * i) - 10 * (i - 1),
-                            0,
-                            0,
-                            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-                        );
-                        i -= 1;
-                    }
+                    reposition_notifications(&active_notifications, right, bottom)
                 }
 
-                // shadows
-                let mut is_dwm_enabled = 0;
-                DwmIsCompositionEnabled(&mut is_dwm_enabled);
-                if is_dwm_enabled == 1 {
-                    let margins = MARGINS {
-                        cxLeftWidth: 1,
-                        cxRightWidth: 0,
-                        cyBottomHeight: 0,
-                        cyTopHeight: 0,
-                    };
-                    DwmExtendFrameIntoClientArea(hwnd, &margins);
-                }
-
-                util::skip_taskbar(hwnd);
                 ShowWindow(hwnd, SW_SHOWNA);
                 if !self.silent {
                     // Passing an invalid path to `PlaySoundW` will make windows play default sound.
@@ -263,26 +231,33 @@ unsafe fn close_notification(hwnd: HWND) {
     // see https://devblogs.microsoft.com/oldnewthing/20110926-00/?p=9553
     SendMessageA(hwnd, WM_CLOSE, 0, 0);
 
-    if let Ok(mut active_noti) = ACTIVE_NOTIFICATIONS.lock() {
-        if let Some(index) = active_noti.iter().position(|e| *e == hwnd) {
-            active_noti.remove(index);
+    if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
+        if let Some(index) = active_notifications.iter().position(|e| *e == hwnd) {
+            active_notifications.remove(index);
         }
 
         // reposition notifications
         if let Ok(pm) = PRIMARY_MONITOR.lock() {
             let RECT { right, bottom, .. } = pm.monitorInfo.rcWork;
-            for (i, h) in active_noti.iter().rev().enumerate() {
-                SetWindowPos(
-                    *h,
-                    0,
-                    right - NW - 15,
-                    bottom - (NH * (i + 1) as i32) - 15,
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER,
-                );
-            }
+            reposition_notifications(&active_notifications, right, bottom);
         }
+    }
+}
+
+#[inline]
+unsafe fn reposition_notifications(notifications: &[isize], right: i32, bottom: i32) {
+    let mut i = notifications.len() as i32;
+    for &hwnd in notifications.iter() {
+        SetWindowPos(
+            hwnd,
+            0,
+            right - NW - 15,
+            bottom - 15 - (NH * i) - 10 * (i - 1),
+            0,
+            0,
+            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+        i -= 1;
     }
 }
 
@@ -301,7 +276,7 @@ pub unsafe extern "system" fn window_proc(
     let mut userdata = GetWindowLongPtrW(hwnd, GWL_USERDATA);
 
     match msg {
-        w32wm::WM_NCCREATE => {
+        WM_NCCREATE => {
             if userdata == 0 {
                 let createstruct = &*(lparam as *const CREATESTRUCTW);
                 userdata = createstruct.lpCreateParams as isize;
@@ -310,18 +285,16 @@ pub unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        // make the window borderless
-        w32wm::WM_NCCALCSIZE => 0,
-
-        w32wm::WM_CREATE => {
+        WM_CREATE => {
             let userdata = userdata as *mut WindowData;
             (*userdata).window = hwnd;
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        w32wm::WM_PAINT => {
+        WM_PAINT | WM_PRINTCLIENT => {
             let userdata = userdata as *mut WindowData;
             let notification = &(*userdata).notification;
+
             let mut ps = PAINTSTRUCT {
                 fErase: 0,
                 fIncUpdate: 0,
@@ -339,108 +312,95 @@ pub unsafe extern "system" fn window_proc(
             SetBkColor(hdc, WC);
 
             // draw notification icon
-            {
-                if let Some(icon) = &notification.icon {
-                    let hicon = util::get_hicon_from_32bpp_rgba(
-                        icon.clone(),
-                        notification.icon_width,
-                        notification.icon_height,
-                    );
-                    DrawIconEx(hdc, NM, NM, hicon, NIS, NIS, 0, 0, DI_NORMAL);
-                }
+            if let Some(icon) = &notification.icon {
+                let hicon = util::get_hicon_from_32bpp_rgba(
+                    icon.clone(),
+                    notification.icon_width,
+                    notification.icon_height,
+                );
+                DrawIconEx(hdc, NM, NM, hicon, NIS, NIS, 0, 0, DI_NORMAL);
             }
 
             // draw notification close button
-            {
-                let hpen = CreatePen(
-                    PS_SOLID,
-                    2,
-                    if (*userdata).mouse_hovering_close_btn {
-                        TC
-                    } else {
-                        SC
-                    },
-                );
-                let old_hpen = SelectObject(hdc, hpen);
-
-                MoveToEx(
-                    hdc,
-                    CLOSE_BTN_RECT.left,
-                    CLOSE_BTN_RECT.top,
-                    std::ptr::null_mut(),
-                );
-                LineTo(hdc, CLOSE_BTN_RECT.right, CLOSE_BTN_RECT.bottom);
-                MoveToEx(
-                    hdc,
-                    CLOSE_BTN_RECT.right,
-                    CLOSE_BTN_RECT.top,
-                    std::ptr::null_mut(),
-                );
-                LineTo(hdc, CLOSE_BTN_RECT.left, CLOSE_BTN_RECT.bottom);
-
-                SelectObject(hdc, old_hpen);
-                DeleteObject(hpen);
-            }
+            let hpen = CreatePen(
+                PS_SOLID,
+                2,
+                if (*userdata).mouse_hovering_close_btn {
+                    TC
+                } else {
+                    SC
+                },
+            );
+            let old_hpen = SelectObject(hdc, hpen);
+            MoveToEx(
+                hdc,
+                CLOSE_BTN_RECT.left,
+                CLOSE_BTN_RECT.top,
+                std::ptr::null_mut(),
+            );
+            LineTo(hdc, CLOSE_BTN_RECT.right, CLOSE_BTN_RECT.bottom);
+            MoveToEx(
+                hdc,
+                CLOSE_BTN_RECT.right,
+                CLOSE_BTN_RECT.top,
+                std::ptr::null_mut(),
+            );
+            LineTo(hdc, CLOSE_BTN_RECT.left, CLOSE_BTN_RECT.bottom);
+            SelectObject(hdc, old_hpen);
+            DeleteObject(hpen);
 
             // draw notification app name
-            {
-                SetTextColor(hdc, TC);
-                let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 15, 400);
-                let appname = util::encode_wide(&notification.appname);
-                TextOutW(
-                    hdc,
-                    NM + NIS + (NM / 2),
-                    NM,
-                    appname.as_ptr(),
-                    appname.len() as _,
-                );
-                SelectObject(hdc, old_hfont);
-                DeleteObject(hfont);
-            }
+            SetTextColor(hdc, TC);
+            let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 15, 400);
+            let appname = util::encode_wide(&notification.appname);
+            TextOutW(
+                hdc,
+                NM + NIS + (NM / 2),
+                NM,
+                appname.as_ptr(),
+                appname.len() as _,
+            );
+            SelectObject(hdc, old_hfont);
+            DeleteObject(hfont);
 
             // draw notification summary (title)
-            {
-                let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 17, 700);
-                let summary = util::encode_wide(&notification.summary);
-                TextOutW(
-                    hdc,
-                    NM,
-                    NM + NIS + (NM / 2),
-                    summary.as_ptr(),
-                    summary.len() as _,
-                );
-                SelectObject(hdc, old_hfont);
-                DeleteObject(hfont);
-            }
+            let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 17, 700);
+            let summary = util::encode_wide(&notification.summary);
+            TextOutW(
+                hdc,
+                NM,
+                NM + NIS + (NM / 2),
+                summary.as_ptr(),
+                summary.len() as _,
+            );
+            SelectObject(hdc, old_hfont);
+            DeleteObject(hfont);
 
             // draw notification body
-            {
-                SetTextColor(hdc, SC);
-                let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 17, 400);
-                let mut rc = RECT {
-                    left: NM,
-                    top: NM + NIS + (NM / 2) + 17 + (NM / 2),
-                    right: NW - NM,
-                    bottom: NH - NM,
-                };
-                let mut body = util::encode_wide(&notification.body);
-                DrawTextW(
-                    hdc,
-                    body.as_mut_ptr(),
-                    body.len() as _,
-                    &mut rc,
-                    DT_LEFT | DT_EXTERNALLEADING | DT_WORDBREAK,
-                );
-
-                SelectObject(hdc, old_hfont);
-                DeleteObject(hfont);
-            }
+            SetTextColor(hdc, SC);
+            let (hfont, old_hfont) = util::set_font(hdc, "Segeo UI", 17, 400);
+            let mut rc = RECT {
+                left: NM,
+                top: NM + NIS + (NM / 2) + 17 + (NM / 2),
+                right: NW - NM,
+                bottom: NH - NM,
+            };
+            let mut body = util::encode_wide(&notification.body);
+            DrawTextW(
+                hdc,
+                body.as_mut_ptr(),
+                body.len() as _,
+                &mut rc,
+                DT_LEFT | DT_EXTERNALLEADING | DT_WORDBREAK,
+            );
+            SelectObject(hdc, old_hfont);
+            DeleteObject(hfont);
 
             EndPaint(hdc, &ps);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        w32wm::WM_MOUSEMOVE => {
+        WM_MOUSEMOVE => {
             let userdata = userdata as *mut WindowData;
 
             let (x, y) = (GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
@@ -456,7 +416,7 @@ pub unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        w32wm::WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN => {
             let (x, y) = (GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
 
             if util::rect_contains(CLOSE_BTN_RECT_EXTRA, x as i32, y as i32) {
@@ -466,7 +426,7 @@ pub unsafe extern "system" fn window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
 
-        w32wm::WM_DESTROY => {
+        WM_DESTROY => {
             let userdata = userdata as *mut WindowData;
             drop(Box::from_raw(userdata));
 

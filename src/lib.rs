@@ -40,7 +40,6 @@
 //! ```
 //!
 
-mod definitions;
 mod notification;
 mod timeout;
 mod util;

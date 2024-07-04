@@ -2,16 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use std::{cell::Cell, ffi::OsStr, iter::once, os::windows::prelude::OsStrExt, ptr};
+use std::{ffi::OsStr, iter::once, os::windows::prelude::OsStrExt};
 
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::Gdi::*,
-    System::Com::*,
     UI::WindowsAndMessaging::{self as w32wm, *},
 };
-
-use crate::definitions::*;
 
 pub fn current_exe_name() -> String {
     std::env::current_exe()
@@ -103,51 +100,6 @@ pub unsafe fn get_monitor_info(hmonitor: HMONITOR) -> MONITORINFOEXW {
         &mut monitor_info as *mut MONITORINFOEXW as *mut MONITORINFO,
     );
     monitor_info
-}
-
-struct ComInitialized(*mut ());
-impl Drop for ComInitialized {
-    fn drop(&mut self) {
-        unsafe { CoUninitialize() };
-    }
-}
-
-thread_local! {
-  static COM_INITIALIZED: ComInitialized = {
-    unsafe {
-        CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED as _);
-        ComInitialized(ptr::null_mut())
-    }
-  };
-
-  static TASKBAR_LIST: Cell<*mut ITaskbarList> = Cell::new(ptr::null_mut());
-}
-
-pub unsafe fn skip_taskbar(hwnd: HWND) {
-    COM_INITIALIZED.with(|_| {});
-
-    TASKBAR_LIST.with(|taskbar_list_ptr| {
-        let mut taskbar_list = taskbar_list_ptr.get();
-
-        if taskbar_list.is_null() {
-            CoCreateInstance(
-                &CLSID_TaskbarList,
-                ptr::null_mut(),
-                CLSCTX_ALL,
-                &IID_ITaskbarList,
-                &mut taskbar_list as *mut _ as *mut _,
-            );
-
-            let hr_init = (*(*taskbar_list).lpVtbl).HrInit;
-            hr_init(taskbar_list.cast());
-
-            taskbar_list_ptr.set(taskbar_list)
-        }
-
-        taskbar_list = taskbar_list_ptr.get();
-        let delete_tab = (*(*taskbar_list).lpVtbl).DeleteTab;
-        delete_tab(taskbar_list, hwnd);
-    });
 }
 
 /// Returns a tuple of new and old `HFONT` handle
