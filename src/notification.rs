@@ -45,7 +45,7 @@ const CLOSE_BTN_RECT_EXTRA: RECT = RECT {
     bottom: CLOSE_BTN_RECT.bottom + 8,
 };
 
-static ACTIVE_NOTIFICATIONS: Lazy<Mutex<Vec<HWND>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static CURRENT_WINDOW: Lazy<Mutex<Option<HWND>>> = Lazy::new(|| Mutex::new(None));
 static PRIMARY_MONITOR: Lazy<Mutex<MONITORINFOEXW>> =
     Lazy::new(|| unsafe { Mutex::new(util::get_monitor_info(util::primary_monitor())) });
 
@@ -147,6 +147,12 @@ impl Notification {
     /// Requires a win32 event_loop to be running on the thread, otherwise the notification will close immediately.
     pub fn show(&self) -> Result<(), u32> {
         unsafe {
+            // close prev window
+            if let Ok(mut current_window) = CURRENT_WINDOW.lock() {
+                if let Some(hwnd) = *current_window {
+                    close_notification(hwnd);
+                }
+            }
             let hinstance = GetModuleHandleW(ptr::null());
 
             let class_name = w!("win7-notifications");
@@ -194,11 +200,20 @@ impl Notification {
                     return Err(GetLastError());
                 }
 
-                // reposition active notifications and make room for new one
-                if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
-                    active_notifications.push(hwnd);
-                    reposition_notifications(&active_notifications, right, bottom)
+                // Stores the current hwnd window
+                if let Ok(mut current_window) = CURRENT_WINDOW.lock() {
+                    *current_window = Some(hwnd);
                 }
+
+                SetWindowPos(
+                    hwnd,
+                    0,
+                    right - NW - 15,
+                    bottom - NH - 15,
+                    0,
+                    0,
+                    SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
+                );
 
                 ShowWindow(hwnd, SW_SHOWNA);
                 if !self.silent {
@@ -230,35 +245,6 @@ unsafe fn close_notification(hwnd: HWND) {
     // Note WM_DESTROY should not be sent directly as it would create a leak
     // see https://devblogs.microsoft.com/oldnewthing/20110926-00/?p=9553
     SendMessageA(hwnd, WM_CLOSE, 0, 0);
-
-    if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
-        if let Some(index) = active_notifications.iter().position(|e| *e == hwnd) {
-            active_notifications.remove(index);
-        }
-
-        // reposition notifications
-        if let Ok(pm) = PRIMARY_MONITOR.lock() {
-            let RECT { right, bottom, .. } = pm.monitorInfo.rcWork;
-            reposition_notifications(&active_notifications, right, bottom);
-        }
-    }
-}
-
-#[inline]
-unsafe fn reposition_notifications(notifications: &[isize], right: i32, bottom: i32) {
-    let mut i = notifications.len() as i32;
-    for &hwnd in notifications.iter() {
-        SetWindowPos(
-            hwnd,
-            0,
-            right - NW - 15,
-            bottom - 15 - (NH * i) - 10 * (i - 1),
-            0,
-            0,
-            SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER,
-        );
-        i -= 1;
-    }
 }
 
 struct WindowData {

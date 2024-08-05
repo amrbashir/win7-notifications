@@ -1,0 +1,5 @@
+---
+"win7-notifications": "patch"
+---
+
+Fix multi-message notification causing application to become unresponsive
