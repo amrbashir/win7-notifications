@@ -1,6 +1,6 @@
 [package]
 name = "win7-notifications"
-version = "0.4.4"
+version = "0.4.5"
 description = "Send Windows 10 styled notifications on Windows 7."
 authors = [ "Tauri Programme within The Commons Conservancy" ]
 edition = "2021"
