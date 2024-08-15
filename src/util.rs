@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
-use std::{ffi::OsStr, iter::once, os::windows::prelude::OsStrExt};
+use std::{
+    ffi::{c_void, OsStr},
+    iter::once,
+    os::windows::prelude::OsStrExt,
+};
 
 use windows_sys::Win32::{
     Foundation::*,
@@ -103,7 +107,7 @@ pub unsafe fn get_monitor_info(hmonitor: HMONITOR) -> MONITORINFOEXW {
 }
 
 /// Returns a tuple of new and old `HFONT` handle
-pub unsafe fn set_font(hdc: HDC, name: &str, size: i32, weight: i32) -> (isize, isize) {
+pub unsafe fn set_font(hdc: HDC, name: &str, size: i32, weight: i32) -> (*mut c_void, *mut c_void) {
     let name = format!("{}\0", name);
     let hfont = CreateFontW(
         size,
@@ -153,7 +157,7 @@ pub fn get_hicon_from_32bpp_rgba(rgba: Vec<u8>, width: u32, height: u32) -> w32w
     assert_eq!(and_mask.len(), pixel_count);
     unsafe {
         w32wm::CreateIcon(
-            HMODULE::default(),
+            std::ptr::null_mut(),
             width as i32,
             height as i32,
             1,

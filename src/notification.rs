@@ -45,7 +45,7 @@ const CLOSE_BTN_RECT_EXTRA: RECT = RECT {
     bottom: CLOSE_BTN_RECT.bottom + 8,
 };
 
-static ACTIVE_NOTIFICATIONS: Lazy<Mutex<Vec<HWND>>> = Lazy::new(|| Mutex::new(Vec::new()));
+static ACTIVE_NOTIFICATIONS: Lazy<Mutex<Vec<isize>>> = Lazy::new(|| Mutex::new(Vec::new()));
 static PRIMARY_MONITOR: Lazy<Mutex<MONITORINFOEXW>> =
     Lazy::new(|| unsafe { Mutex::new(util::get_monitor_info(util::primary_monitor())) });
 
@@ -159,10 +159,10 @@ impl Notification {
                 style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
                 cbClsExtra: 0,
                 cbWndExtra: 0,
-                hIcon: 0,
-                hCursor: 0, // must be null in order for cursor state to work properly
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(), // must be null in order for cursor state to work properly
                 lpszMenuName: ptr::null(),
-                hIconSm: 0,
+                hIconSm: std::ptr::null_mut(),
             };
             RegisterClassExW(&wnd_class);
 
@@ -170,7 +170,7 @@ impl Notification {
                 let RECT { right, bottom, .. } = pm.monitorInfo.rcWork;
 
                 let data = WindowData {
-                    window: 0,
+                    window: std::ptr::null_mut(),
                     mouse_hovering_close_btn: false,
                     notification: self.clone(),
                 };
@@ -184,19 +184,19 @@ impl Notification {
                     bottom - NH - 15,
                     NW,
                     NH,
-                    0,
-                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
                     hinstance,
                     Box::into_raw(Box::new(data)) as _,
                 );
 
-                if hwnd == 0 {
+                if hwnd.is_null() {
                     return Err(GetLastError());
                 }
 
                 // reposition active notifications and make room for new one
                 if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
-                    active_notifications.push(hwnd);
+                    active_notifications.push(hwnd as _);
                     reposition_notifications(&active_notifications, right, bottom)
                 }
 
@@ -208,6 +208,7 @@ impl Notification {
                 }
 
                 let timeout = self.timeout;
+                let hwnd = hwnd as isize;
                 thread::spawn(move || {
                     thread::sleep(Duration::from_millis(timeout.into()));
                     if timeout != Timeout::Never {
@@ -221,15 +222,15 @@ impl Notification {
     }
 }
 
-unsafe fn close_notification(hwnd: HWND) {
-    ShowWindow(hwnd, SW_HIDE);
-    CloseWindow(hwnd);
+unsafe fn close_notification(hwnd: isize) {
+    ShowWindow(hwnd as _, SW_HIDE);
+    CloseWindow(hwnd as _);
 
     // We can NOT call `DestroyWindow` from this window
     // Sending WM_CLOSE will by default make the windows call it on itself.
     // Note WM_DESTROY should not be sent directly as it would create a leak
     // see https://devblogs.microsoft.com/oldnewthing/20110926-00/?p=9553
-    SendMessageA(hwnd, WM_CLOSE, 0, 0);
+    SendMessageA(hwnd as _, WM_CLOSE, 0, 0);
 
     if let Ok(mut active_notifications) = ACTIVE_NOTIFICATIONS.lock() {
         if let Some(index) = active_notifications.iter().position(|e| *e == hwnd) {
@@ -249,8 +250,8 @@ unsafe fn reposition_notifications(notifications: &[isize], right: i32, bottom: 
     let mut i = notifications.len() as i32;
     for &hwnd in notifications.iter() {
         SetWindowPos(
-            hwnd,
-            0,
+            hwnd as _,
+            std::ptr::null_mut(),
             right - NW - 15,
             bottom - 15 - (NH * i) - 10 * (i - 1),
             0,
@@ -299,7 +300,7 @@ pub unsafe extern "system" fn window_proc(
                 fErase: 0,
                 fIncUpdate: 0,
                 fRestore: 0,
-                hdc: 0,
+                hdc: std::ptr::null_mut(),
                 rcPaint: RECT {
                     bottom: 0,
                     left: 0,
@@ -318,7 +319,17 @@ pub unsafe extern "system" fn window_proc(
                     notification.icon_width,
                     notification.icon_height,
                 );
-                DrawIconEx(hdc, NM, NM, hicon, NIS, NIS, 0, 0, DI_NORMAL);
+                DrawIconEx(
+                    hdc,
+                    NM,
+                    NM,
+                    hicon,
+                    NIS,
+                    NIS,
+                    0,
+                    std::ptr::null_mut(),
+                    DI_NORMAL,
+                );
             }
 
             // draw notification close button
@@ -406,7 +417,10 @@ pub unsafe extern "system" fn window_proc(
             let (x, y) = (GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
             let hit = util::rect_contains(CLOSE_BTN_RECT_EXTRA, x as i32, y as i32);
 
-            SetCursor(LoadCursorW(0, if hit { IDC_HAND } else { IDC_ARROW }));
+            SetCursor(LoadCursorW(
+                std::ptr::null_mut(),
+                if hit { IDC_HAND } else { IDC_ARROW },
+            ));
             if hit != (*userdata).mouse_hovering_close_btn {
                 // only trigger redraw if the previous state is different than the new state
                 InvalidateRect(hwnd, std::ptr::null(), 0);
@@ -420,7 +434,7 @@ pub unsafe extern "system" fn window_proc(
             let (x, y) = (GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam));
 
             if util::rect_contains(CLOSE_BTN_RECT_EXTRA, x as i32, y as i32) {
-                close_notification(hwnd)
+                close_notification(hwnd as _)
             }
 
             DefWindowProcW(hwnd, msg, wparam, lparam)
